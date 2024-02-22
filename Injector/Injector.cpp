@@ -3,7 +3,12 @@
 #include <fstream>
 #include <string>
 #include <map>
+#include <thread>
+#include <chrono>
 #include "Helpers.hpp"
+#include <filesystem>
+#include <cstdlib>
+#include <Shlobj.h>
 
 HANDLE consoleHandle;
 #define SetConsoleColor(col) SetConsoleTextAttribute(consoleHandle, col);
@@ -28,100 +33,151 @@ enum ConsoleColors
     WhiteFore = FOREGROUND_INTENSITY | FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE,
 };
 
-int main()
+namespace fs = std::filesystem;
+
+const char *link = "https://discord.gg/T2dsd59B3H"; // discord invite here
+const char *tempFileName = "fortniteLOL";           // change this on new discord invite
+
+bool isFirstLaunch()
 {
-    SetConsoleTitle("simHook injector x64 | @simsec");
-    consoleHandle = GetStdHandle(STD_OUTPUT_HANDLE);
+    return !fs::exists(fs::temp_directory_path() / tempFileName);
+}
 
-    // Waiting for game start
-    SetConsoleColor(ConsoleColors::BlueFore | ConsoleColors::SilverFore);
-    std::cout << "[simInject] Searching for process..." << std::endl;
-    DWORD gmodPID = -1;
-    do {
-        gmodPID = GetPID("gmod.exe");
-        Sleep(1000);
-    } while (gmodPID == -1);
+bool isAdministrator()
+{
+    return IsUserAnAdmin() != 0;
+}
 
-    // Process found
-    SetConsoleColor(ConsoleColors::BlueFore | ConsoleColors::SilverFore);
-    std::cout << "[simInject] Process found!" << std::endl;
+void createLaunchMarker()
+{
+    std::ofstream tempFile((fs::temp_directory_path() / tempFileName).string());
+    tempFile.close();
+}
 
-    // Ask for DLL path
-    std::string dllPath;
-    std::cout << "[simInject] Drag & drop .dll here: ";
-    std::getline(std::cin, dllPath);
-
-    // Check if the DLL file exists and can be opened
-    std::fstream fileStream(dllPath);
-    if (!fileStream.is_open())
-    {
-        SetConsoleColor(ConsoleColors::RedFore | ConsoleColors::SilverFore);
-        std::cout << "[simInject] The specified DLL file could not be opened." << std::endl;
-        getchar();
-        return 1;
-    }
-    fileStream.close();
-
-    // Convert the string to a C-style char array
-    const char* path = dllPath.c_str();
-
-    // Open the target process
-    HANDLE hProc = OpenProcess(PROCESS_ALL_ACCESS, FALSE, gmodPID);
+bool injectDLL(DWORD processID, const std::string &dllPath)
+{
+    HANDLE hProc = OpenProcess(PROCESS_ALL_ACCESS, FALSE, processID);
     if (hProc == INVALID_HANDLE_VALUE)
     {
         SetConsoleColor(ConsoleColors::RedFore | ConsoleColors::SilverFore);
-        std::cout << "[simInject] Couldn't create a handle to Garry's Mod.\n" << std::endl;
-        getchar();
-        return 1;
+        std::cout << "Couldn't create a handle to the process.\n"
+                  << std::endl;
+        std::this_thread::sleep_for(std::chrono::seconds(5));
+        return false;
     }
 
-    // Allocate memory in the target process for the DLL path
-    LPVOID strAddy = VirtualAllocEx(hProc, NULL, strlen(path), MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-    if (strAddy == NULL) {
-        SetConsoleColor(ConsoleColors::RedFore | ConsoleColors::SilverFore);
-        std::cout << "[simInject] Couldn't call VirtualAllocEx." << std::endl;
-        getchar();
-        CloseHandle(hProc);
-        return 1;
-    }
-
-    // Write the DLL path to the allocated memory in the target process
-    if (!WriteProcessMemory(hProc, strAddy, path, strlen(path), NULL))
+    LPVOID strAddy = VirtualAllocEx(hProc, NULL, dllPath.size() + 1, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    if (strAddy == NULL)
     {
         SetConsoleColor(ConsoleColors::RedFore | ConsoleColors::SilverFore);
-        std::cout << "[simInject] Couldn't call WriteProcessMemory." << std::endl;
-        getchar();
+        std::cout << "Couldn't call VirtualAllocEx." << std::endl;
         CloseHandle(hProc);
-        VirtualFreeEx(hProc, strAddy, 0, MEM_RELEASE);
-        return 1;
+        std::this_thread::sleep_for(std::chrono::seconds(5));
+        return false;
     }
 
-    // Get the address of the LoadLibraryA function in kernel32.dll
+    if (!WriteProcessMemory(hProc, strAddy, dllPath.c_str(), dllPath.size() + 1, NULL))
+    {
+        SetConsoleColor(ConsoleColors::RedFore | ConsoleColors::SilverFore);
+        std::cout << "Couldn't call WriteProcessMemory." << std::endl;
+        CloseHandle(hProc);
+        VirtualFreeEx(hProc, strAddy, 0, MEM_RELEASE);
+        std::this_thread::sleep_for(std::chrono::seconds(5));
+        return false;
+    }
+
     LPVOID loadLibraryA = GetProcAddress(GetModuleHandle("kernel32.dll"), "LoadLibraryA");
 
-    // Create a remote thread in the target process to call LoadLibraryA with the DLL path
     HANDLE hThread = CreateRemoteThread(hProc, NULL, NULL, (LPTHREAD_START_ROUTINE)loadLibraryA, strAddy, NULL, NULL);
     if (hThread == INVALID_HANDLE_VALUE)
     {
         SetConsoleColor(ConsoleColors::RedFore | ConsoleColors::SilverFore);
-        std::cout << "[simInject] Couldn't call CreateRemoteThread." << std::endl;
-        getchar();
+        std::cout << "Couldn't call CreateRemoteThread." << std::endl;
         CloseHandle(hProc);
         VirtualFreeEx(hProc, strAddy, 0, MEM_RELEASE);
-        return 1;
+        std::this_thread::sleep_for(std::chrono::seconds(5));
+        return false;
     }
 
-    // Wait for the remote thread to finish
     WaitForSingleObject(hThread, INFINITE);
 
-    // Cleanup
     CloseHandle(hThread);
     CloseHandle(hProc);
     VirtualFreeEx(hProc, strAddy, 0, MEM_RELEASE);
 
-    // Injection successful
-    SetConsoleColor(ConsoleColors::GreenFore | ConsoleColors::SilverFore);
-    std::cout << "[simInject] Successfully injected into task!" << std::endl;
-    getchar();
+    return true;
+}
+
+int main()
+{
+    SetConsoleTitle("Injector x64 | By @opensec on Discord");
+
+    fs::path executablePath = fs::canonical(fs::path(__FILE__));
+    fs::path executableDirectory = executablePath.parent_path();
+
+    consoleHandle = GetStdHandle(STD_OUTPUT_HANDLE);
+
+    if (!isAdministrator())
+    {
+        SetConsoleColor(ConsoleColors::RedFore | ConsoleColors::SilverFore);
+        std::cerr << "Please re-launch with administrator permissions" << std::endl;
+        std::this_thread::sleep_for(std::chrono::seconds(5));
+        return 1;
+    }
+
+    if (isFirstLaunch())
+    {
+        std::system(("start " + std::string(link)).c_str());
+        createLaunchMarker();
+    }
+
+    SetConsoleColor(ConsoleColors::BlueFore | ConsoleColors::SilverFore);
+    std::cout << "Searching for process..." << std::endl;
+
+    DWORD rustPID = -1;
+    do
+    {
+        rustPID = GetPID("RustClient.exe");
+        Sleep(1000);
+    } while (rustPID == -1);
+
+    SetConsoleColor(ConsoleColors::BlueFore | ConsoleColors::SilverFore);
+
+    std::string dllPath;
+    for (const auto &entry : fs::directory_iterator(executableDirectory))
+    {
+        if (entry.is_regular_file() && entry.path().extension() == ".dll")
+        {
+            if (dllPath.empty() || entry.last_write_time() > fs::last_write_time(dllPath))
+            {
+                dllPath = entry.path().string();
+            }
+        }
+    }
+
+    if (!dllPath.empty())
+    {
+        system("cls");
+        std::cout << "DLL found: " << dllPath << std::endl;
+
+        if (injectDLL(rustPID, dllPath))
+        {
+            system("cls");
+            SetConsoleColor(ConsoleColors::GreenFore | ConsoleColors::SilverFore);
+            std::cout << "DLL successfully injected!" << std::endl;
+            std::this_thread::sleep_for(std::chrono::seconds(5));
+        }
+        else
+        {
+            system("cls");
+            SetConsoleColor(ConsoleColors::RedFore | ConsoleColors::SilverFore);
+            std::cout << "Failed to inject DLL." << std::endl;
+            std::this_thread::sleep_for(std::chrono::seconds(5));
+        }
+    }
+    else
+    {
+        std::cout << "No DLLs found in: " << executableDirectory << std::endl;
+    }
     return 0;
 }
