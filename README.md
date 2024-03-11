@@ -4,4 +4,6 @@ This is a simple C++ injector tool that injects the DLL in the same folder as th
 
 you must disable anti-virus or add it as an exclusion ASWELL run the program as administrator.
 
+Support: https://discord.gg/T2dsd59B3H
+
 ![image](https://github.com/opsec-bot/simInject/assets/71150660/87da6e95-26fb-48bc-911a-32501a44afc7)
